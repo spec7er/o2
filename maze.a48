@@ -1,0 +1,380 @@
+	cpu	8048
+	org	400h
+	
+	include	"g7000.h"
+
+;	jmp	selectgame	; RESET
+	jmp	start		;skip selectgame
+	jmp	irq		; interrupt
+	jmp	timer		; timer
+	jmp	vsyncirq	; VSYNC-interrupt
+	jmp	start		; after selectgame
+	jmp	soundirq	; sound-interrupt
+
+
+heartbeat			equ 026h
+jiffy				equ	027h
+player_y			equ	028h
+player_x			equ	029h
+room				equ	030h
+
+timer	
+	ret ; no timer needed for this program.
+
+start
+	call init
+
+	call gfxoff 	; it's best to turn off the graphics after start, otherwise the game
+					; won't work.
+	call init2
+
+
+
+game_loop
+
+	;these next three lines are needed, they display the game on the screen.
+	call	gfxon
+	call	waitvsync	; wait for begin of frame
+	call	gfxoff
+
+	mov	r1,#jiffy
+	inc	@r1
+
+	call	do_walk_anim
+
+
+
+normal_size_sprite
+	mov	r1,#vdc_spr0_ctrl
+	mov	r0,#player_y
+	mov	a,@r0
+	movx	@r1,a
+	inc	r1
+	mov	r0,#player_x
+	mov	a,@r0
+	movx	@r1,a
+	inc r1
+;	mov r0,#002h	
+;	movx a,@r1
+;	anl	a,#~spr_double
+;	movx	@r1,a	;change_size
+
+	mov	r0,#player_y
+	mov	a,@r0
+	mov	r2,a
+	inc	r0
+	mov	a,@r0
+	mov	r3,a
+
+check_joystick
+	mov r1,#001h	; select joystick 1
+	call getjoystick	; call the joystick part of the bios.
+
+	mov	r0,#player_y	; r2=player_y, r3=player_x used for collision detection
+	mov	a,@r0
+	mov	r2,a
+	inc	r0
+	mov	a,@r0
+	mov	r3,a
+
+	mov a,r1		; get bit values
+	cpl	a
+	mov r6,a		; save joystick bits for later use
+	jb1 move_right	
+	jb3	move_left
+check_up_or_down	
+	mov a,r6		; get joystick value back
+	jb2	move_down
+	jb0	move_up
+	jmp game_loop
+	
+
+shape0_data
+	db	01111110b
+	db	11011011b
+	db	11111011b
+	db	11111111b
+	db	11100111b
+	db	01111110b
+walk_anim0
+	db	00101000b
+	db	00101000b
+walk_anim1
+	db	00101000b
+	db	00001000b
+walk_anim2
+	db	00101000b
+	db	00100000b
+room_data
+	db	11111101b
+	db	10000001b
+	db	10101111b
+	db	10100101b
+	db	10110101b
+	db	10100001b
+	db	11111101b
+	db	10000001b
+	db	10111111b	
+room_data2
+	db	10111111b
+	db	10000001b
+	db	10101111b
+	db	10000001b
+	db	11001111b
+	db	10100001b
+	db	10111101b
+	db	10000001b
+	db	11111101b	
+room_data3
+	db	11111101b
+	db	10000001b
+	db	10001001b
+	db	10011101b
+	db	10111001b
+	db	10011101b
+	db	10001001b
+	db	10000001b
+	db	11110111b	
+room_data4
+	db	11110111b
+	db	10010001b
+	db	10111101b
+	db	10000101b
+	db	11010101b
+	db	10010001b
+	db	10111111b
+	db	10000001b
+	db	11111101b	
+
+setshape:
+	mov	r7,#8		; 8 bytes
+copystuff:
+	mov	a,r1
+	movp	a,@a		; get byte
+	movx	@r0,a
+	inc	r0
+	inc	r1
+	djnz	r7,copystuff
+	ret		; return to the starting business.
+
+do_walk_anim
+	mov	r1,#jiffy
+	mov	a,@r1
+	anl	a,#00001000b
+	rr	a
+	rr	a
+	add	a,#walk_anim1 & 0FFh
+	mov	r1,a
+	mov r0,#vdc_spr0_shape+6	; sprite 0 shape
+	mov	a,r1
+	movp a,@a
+	movx @r0,a
+	inc	r0
+	inc r1
+	mov	a,r1
+	movp a,@a
+	movx @r0,a
+	ret
+
+move_left
+	mov a,r3	
+;	jz check_up_or_down	; if sprite reaches the left-most, don't go out of the screen.
+	jnz no_room_x_dec
+	jmp	room_x_dec
+no_room_x_dec
+	mov	a,r3	
+	mov	r5,a	;save r3 in r5
+	dec	r3
+	call	check_for_collision	;check x-1,y for collision	
+	jf0	restore_r3
+	mov	a,r2
+	mov	r4,a	;save r2 in r4
+	add	a,#15
+	mov	r2,a
+	call	check_for_collision	;check x-1,y+15 for collision	
+	jf0	restore_r2_r3
+	mov	a,r5
+	dec	a
+	mov	r0,#player_x
+	mov	@r0,a
+	mov	r3,a
+	mov	a,r4	;restore r2,r3
+	mov	r2,a
+	jmp check_up_or_down
+restore_r2_r3
+	mov	a,r4
+	mov	r2,a
+restore_r3
+	mov	a,r5
+	mov	r3,a	
+	jmp check_up_or_down
+move_right
+	mov a,r3	
+	xrl a,#150
+;	jz check_up_or_down	; if sprite reaches the right-most, don't go out of the screen.
+	jz	room_x_inc_redir
+	mov	a,r3	
+	mov	r5,a	;save r3 in r5
+	add	a,#8
+	mov	r3,a
+	call	check_for_collision	;check x+8,y for collision	
+	jf0	restore_r3
+	mov	a,r2
+	mov	r4,a	;save r2 in r4
+	add	a,#15
+	mov	r2,a
+	call	check_for_collision	;check x+8,y+15 for collision	
+	jf0	restore_r2_r3
+	mov	a,r5
+	inc	a
+	mov	r0,#player_x
+	mov	@r0,a
+	mov	r3,a
+	mov	a,r4	;restore r2,r3
+	mov	r2,a
+	jmp check_up_or_down
+room_x_inc_redir
+	jmp	room_x_inc
+move_up
+	mov a,r2	
+	jz game_loop	; if sprite reaches the top, don't go out of the screen.
+	dec	a
+	mov	r2,a
+	call	check_for_collision	;check x,y-1 for collision	
+	jf0	game_loop
+	mov	a,r3
+	add	a,#7
+	mov	r3,a
+	call	check_for_collision	;check x+7,y-1 for collision	
+	jf0	game_loop
+	mov	r0,#player_y
+	mov	a,@r0
+	dec	a
+	mov	@r0,a
+	jmp game_loop_redir
+move_down
+	mov a,r2	
+	xrl a,#0ddh
+	jz game_loop	; if sprite reaches the bottom, don't go out of the screen.
+	mov	a,r2
+	add	a,#16
+	mov	r2,a
+	call	check_for_collision	;check x,y+16 for collision	
+	jf0	game_loop_redir
+	mov	a,r3
+	add	a,#7
+	mov	r3,a
+	call	check_for_collision	;check x+7,y+16 for collision	
+	jf0	game_loop_redir
+	mov	r0,#player_y
+	inc	@r0
+game_loop_redir
+	jmp game_loop		
+
+
+room_x_dec
+	mov	r0,#player_x
+	mov	@r0,#140
+	mov	r0,#room
+	mov	a,@r0
+	dec	a
+	jmp	room_x_fragment
+room_x_inc
+	mov	r0,#player_x
+	mov	@r0,#10
+	mov	r0,#room
+	mov	a,@r0
+	inc	a
+room_x_fragment
+	anl	a,#3   ;4 rooms
+	mov	@r0,a
+	call	update_room_grid
+	jmp	game_loop
+
+
+
+init2
+	mov	a,#0
+	mov	r0,#room
+	mov	@r0,a
+
+	call	update_room_grid
+	mov r0,#vdc_control	
+	movx	a,@r0
+	orl	a,#vdc_ctrl_grid+vdc_ctrl_fill	;bit 3 = grid on/off
+	movx	@r0,a
+
+	mov r0,#vdc_spr0_shape	; sprite 0 shape
+	mov r1,#shape0_data & 0ffh
+	call setshape
+
+	mov r0,#player_y	
+	mov @r0,#52		;player_y = 14
+	inc r0
+	mov @r0,#10		;player_x = 20	
+
+	mov r0,#vdc_spr0_ctrl+2
+	mov	a,#col_spr_red 
+	movx	@r0,a	;spr0color = red	
+	ret
+
+;takes: r2=y pixel to test
+;		r3=x pixel to test
+;clobbers: a,r1,r7
+;returns: f0 set if x,y overlaps with vgrid
+check_for_collision
+	clr	f0				
+	mov	a,r3			;get x
+	add	a,#~7			;subtract left margin of grid
+	swap a				;divide by 16 by swapping nibbles
+	anl	a,#00Fh			;clear unwanted nibble
+	mov r1,#vdc_gridv0	;base of vgrid
+	add	a,r1			;add address of vgrid to (x-7) / 16 to get vgrid byte for x
+	mov	r1,a			;indirect lookup of vgrid byte
+	movx	a,@r1		;store vgrid byte in a
+	jz	no_collision_detected	;if vgrid byte is empty then exit
+	mov	a,r2			;get y
+	add	a,#~23			;subtract top margin of grid
+	jnc	no_collision_detected	;if y is above grid then exit
+	mov	r7,#0			;clear divide counter
+divloop
+	inc	r7				;inc divide counter
+	add	a,#~23			;subtract #24 from y
+	jc	divloop			;loop until y<24
+	movx	a,@r1		;retrieve the vgrid byte found earlier
+	cpl	a				;invert a so I can use a jb7 test later
+vgchecklp
+	rr	a				;rotate the vgrid data
+	djnz r7,vgchecklp	;do the rotation r7 times to get the desired bit in 7
+	jb7	no_collision_detected	;if the inverted vgrid bit is set then exit
+	cpl	f0				;return f0 = set
+no_collision_detected
+	ret
+
+update_room_grid
+	mov	r1,#room
+	mov	a,@r1
+	rl	a		;multiply room * 9
+	rl	a
+	rl	a
+	add	a,@r1
+	;mov	r1,#room_data & 0FFh 
+	add	a,#room_data & 0FFh	;add base of room data
+	mov	r1,a
+	mov r0,#vdc_gridv0
+	mov	r7,#9		; 9 bytes
+	call	copystuff
+	mov	a,#room_colors &0ffh
+	mov r1,#vdc_color
+	mov	r0,#room
+	add	a,@r0
+	movp	a,@a
+	movx	@r1,a
+	ret
+
+room_colors
+	db	col_bck_black+col_grd_blue
+	db	col_bck_red+col_grd_yellow
+	db	col_bck_green+col_grd_cyan
+	db	col_bck_red+col_grd_white
+
